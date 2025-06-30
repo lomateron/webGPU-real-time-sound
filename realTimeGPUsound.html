@@ -161,7 +161,7 @@
             usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
         });
 
-        myShader = gpuDv.createShaderModule({ code: myWGSL });
+        myShader         = gpuDv.createShaderModule({ code: myWGSL });
         computePipelineR = gpuDv.createComputePipeline({
             layout: gpuDv.createPipelineLayout({
                 bindGroupLayouts: [bindGroupLayout0],
@@ -176,6 +176,34 @@
     };
     iniWebAudio = function()
     {
+        if(sndCx == null)
+        {
+            sndCx      = new window.AudioContext();
+            sndCn      = Math.floor(sndCx.currentTime / sndTg + 1) * sndTg;
+            myGainNode = sndCx.createGain();
+            myGainNode.connect(sndCx.destination);
+            audioPlay = function()
+            {
+                let data = new Float32Array(buffGPUsoundDST.getMappedRange());
+                let sb = sndCx.createBuffer(sndCh, sndSu, sndRt);
+                let rd = 0;
+                for(let i = 0; i<sndCh; i++)
+                {
+                    let d = sb.getChannelData(i);
+                    for(let j = 0; j < sndSu; ++j)
+                    {
+                        d[j] = data[rd];  rd++;
+                    }
+                }
+                buffGPUsoundDST.unmap();
+                myGainNode.gain.value = sndVo;
+                let myAudioNode     = sndCx.createBufferSource();
+                myAudioNode.onended = myAudioNode.disconnect;
+                myAudioNode.buffer  = sb;
+                myAudioNode.connect(myGainNode);
+                myAudioNode.start(sndCn);
+            };
+        }
         //play random sound because some browsers
         //lock AudioContext.currentTime till any sound is played
         if(sndCx != null)
@@ -196,35 +224,7 @@
             myAudioNode.buffer  = sb;
             myAudioNode.connect(myGainNode);
             myAudioNode.start();
-            return;  //return because webAudio is already initialized
         }
-
-        sndCx      = new window.AudioContext();
-        sndCn      = Math.floor(sndCx.currentTime / sndTg + 1) * sndTg;
-        myGainNode = sndCx.createGain();
-        myGainNode.connect(sndCx.destination);
-        
-        audioPlay = function()
-        {
-            let data = new Float32Array(buffGPUsoundDST.getMappedRange());
-            let sb = sndCx.createBuffer(sndCh, sndSu, sndRt);
-            let rd = 0;
-            for(let i = 0; i<sndCh; i++)
-            {
-                let d = sb.getChannelData(i);
-                for(let j = 0; j < sndSu; ++j)
-                {
-                    d[j] = data[rd];  rd++;
-                }
-            }
-            buffGPUsoundDST.unmap();
-            myGainNode.gain.value = sndVo;
-            let myAudioNode     = sndCx.createBufferSource();
-            myAudioNode.onended = myAudioNode.disconnect;
-            myAudioNode.buffer  = sb;
-            myAudioNode.connect(myGainNode);
-            myAudioNode.start(sndCn);
-        }; 
     };
     
     render = function()
