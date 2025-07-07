@@ -9,24 +9,24 @@
     // 'sndB' is a GPU read-write buffer
     // 'sndB' is tranfered from GPU to CPU every 'sndTg' seconds to be played as sound
     // 'sndB' has 'sndSu' samples of left channel followed by 'sndSu' samples for right channel
-    // 'audioPlayTime'    use to know when 'sndB' will be played as sound
-    // 'audioPlayTime'    increments every 'sndTg' seconds by 'sndTg' seconds
-    // 'audioPlayTime'    is relative to AudioContext.currentTime
-    // 'audioCurrentTime' is AudioContext.currentTime, use with 'audioPlayTime' to syncronize visuals-audio
-    // 'audioFrame'       frame ID of 'sndB', increments +1 every 'sndTg' seconds
+    // 'sndPlayTime'      use to know when 'sndB' will be played as sound
+    // 'sndPlayTime'      increments every 'sndTg' seconds by 'sndSu' samples
+    // 'sndPlayTime'      is relative to AudioContext.currentTime
+    // 'sndFrameID'       frame ID of 'sndB', increments +1 every 'sndTg' seconds
+    // 'audioCurrentTime' is AudioContext.currentTime, use with 'sndPlayTime' to syncronize visuals-audio
 
     gpuDv     = null;               //gpu device
-    sndCx     = null;               //sound context
-    sndRt     = 48000;              //generate sound sample rate
-    sndFr     = 0;                  //generate sound frame ID
-    sndCn     = 0;                  //generate sound every X seconds counter
-    sndTg     = .1;                 //generate sound every X seconds
-    sndSu     = (sndTg*sndRt)|0;    //generate sound every X samples
-    sndCh     = 2;                  //sound channels
-    sndVo     = .5;                 //sound volume control
-    computeDZ = 2<<26;              //size of compute buffer for wateveruse 'myB'
-    computeSZ = 4*sndCh*sndSu;      //size of compute buffer for sound 'sndB'
-    screenT   = 64;                 //compute threads of shader rendering to screen
+    audioCtx  = null;               //audio context
+    audioVol  = .5;                 //audio volume control
+    sndRt     = 48000;              //sound frame sample rate
+    sndCt     = 0;                  //sound frame time relative to AudioContext.currentTime
+    sndFr     = 0;                  //sound frame ID   relative to total frames passed
+    sndTg     = .04;                //sound frame generated every X seconds
+    sndSu     = (sndTg*sndRt)|0;    //sound frame generated every X samples
+    sndCh     = 2;                  //sound frame channels
+    computeDZ = 2<<26;              //size of gpu buffer for wateveruse 'myB'
+    computeSZ = 4*sndCh*sndSu;      //size of gpu buffer for sound 'sndB'
+    screenT   = 64;                 //gpu threads of shader rendering to screen
     screenZ   = 256;                //screen texture size
     uniformZ  = 8;                  //UniformStruct total elements
     timP      = 0;                  //updated time each frame
@@ -40,9 +40,9 @@
     struct UniformStruct
     {
         time             : f32,
-        audioCurrentTime : f32,
-        audioPlayTime    : f32,
-        audioFrame       : i32,
+        audioCurrentTime : i32,
+        sndPlayTime      : i32,
+        sndFrameID       : i32,
     }
     @binding(0) @group(0) var<uniform            > myU: UniformStruct;
     @binding(1) @group(0) var<storage, read_write> myB: array<f32>;  //buffer used for whatever computation you want
@@ -61,12 +61,12 @@
         var w = i32(id3.x + id3.y*u32(screenZ));
         if(w < sndSu)
         {
-            var smpt =     myU.audioPlayTime + f32(w)/f32(sndRt);   //time of this sample
-                smpt = f32(myU.audioFrame*sndSu +  w)/f32(sndRt);   //time of this sample
-            var freq = 400f;                                        //sound frequency in hertz
-            var v    = cos(smpt*freq*PI*2f);
-            sndB[sndSu*0 + w] = v;                                  //sound left  channel
-            sndB[sndSu*1 + w] = v;                                  //sound right channel
+            var said = myU.sndPlayTime      + w;                //this sample ID relative to AudioContext.currentTime
+            //  said = myU.sndFrameID*sndSu + w;                //this sample ID relative to total audio frames passed
+            var freq = 400f;                                    //sound frequency in hertz
+            var v    = cos(f32(said)/f32(sndRt)*freq*PI*2f);
+            sndB[sndSu*0 + w] = v;                              //sound left  channel
+            sndB[sndSu*1 + w] = v;                              //sound right channel
         }
     }`;
 
@@ -146,7 +146,7 @@
         });
 
         buffGPUuniform = gpuDv.createBuffer({
-            size: uniformZ * Uint32Array.BYTES_PER_ELEMENT,
+            size: uniformZ * 4,
             usage:
                 GPUBufferUsage.STORAGE |
                 GPUBufferUsage.UNIFORM |
@@ -183,16 +183,16 @@
     };
     iniWebAudio = function()
     {
-        if(sndCx == null)
+        if(audioCtx == null)
         {
-            sndCx      = new window.AudioContext();
-            sndCn      = Math.floor(sndCx.currentTime / sndTg + 1) * sndTg;
-            myGainNode = sndCx.createGain();
-            myGainNode.connect(sndCx.destination);
+            audioCtx   = new window.AudioContext();
+            sndCt      = Math.floor(audioCtx.currentTime / sndTg + 1) * sndTg;
+            myGainNode = audioCtx.createGain();
+            myGainNode.connect(audioCtx.destination);
             audioPlay = function()
             {
                 let data = new Float32Array(buffGPUsoundDST.getMappedRange());
-                let sb = sndCx.createBuffer(sndCh, sndSu, sndRt);
+                let sb = audioCtx.createBuffer(sndCh, sndSu, sndRt);
                 let rd = 0;
                 for(let i = 0; i<sndCh; i++)
                 {
@@ -203,20 +203,20 @@
                     }
                 }
                 buffGPUsoundDST.unmap();
-                myGainNode.gain.value = sndVo;
-                let myAudioNode     = sndCx.createBufferSource();
+                myGainNode.gain.value = audioVol;
+                let myAudioNode     = audioCtx.createBufferSource();
                 myAudioNode.onended = myAudioNode.disconnect;
                 myAudioNode.buffer  = sb;
                 myAudioNode.connect(myGainNode);
-                myAudioNode.start(sndCn);
+                myAudioNode.start(sndCt);
             };
         }
         //play random sound because some browsers
         //lock AudioContext.currentTime till any sound is played
-        if(sndCx != null)
+        if(audioCtx != null)
         {
             let z  = ((sndRt * .07)|0) + 1;
-            let sb = sndCx.createBuffer(sndCh, z, sndRt);
+            let sb = audioCtx.createBuffer(sndCh, z, sndRt);
             for(let i = 0; i<sndCh; i++)
             {
                 let d = sb.getChannelData(i);
@@ -225,8 +225,8 @@
                     d[j] = (Math.random()*2-1)*.1;
                 }
             }
-            myGainNode.gain.value = sndVo;
-            let myAudioNode     = sndCx.createBufferSource();
+            myGainNode.gain.value = audioVol;
+            let myAudioNode     = audioCtx.createBufferSource();
             myAudioNode.onended = myAudioNode.disconnect;
             myAudioNode.buffer  = sb;
             myAudioNode.connect(myGainNode);
@@ -245,8 +245,8 @@
         let uniformDf = new Float32Array(uniformD);
         let uniformDi = new   Int32Array(uniformD);
         uniformDf[0] = timN*.001;
-        uniformDf[1] = sndCx.currentTime;
-        uniformDf[2] = sndCn + sndTg;
+        uniformDi[1] = sndRt * (audioCtx.currentTime);
+        uniformDi[2] = sndRt * (sndCt + sndTg);
         uniformDi[3] = sndFr;
         gpuDv.queue.writeBuffer(buffGPUuniform, 0, uniformD);
 
@@ -271,9 +271,9 @@
         gpuDv.queue.submit([commandEncoder.finish()]);
 
         //send sound GPU to CPU and play
-        if(sndCx != null && sndCx.currentTime > sndCn)
+        if(audioCtx != null && audioCtx.currentTime > sndCt)
         {
-            sndCn = Math.floor(sndCx.currentTime / sndTg + 1) * sndTg;
+            sndCt = Math.floor(audioCtx.currentTime / sndTg + 1) * sndTg;
             sndFr++;
             commandEncoder = gpuDv.createCommandEncoder();
             commandEncoder.copyBufferToBuffer(buffGPUsoundSRC, 0, buffGPUsoundDST, 0, buffGPUsoundDST.size);
